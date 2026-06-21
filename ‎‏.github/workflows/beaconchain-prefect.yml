@@ -1,0 +1,265 @@
+name: 🔥 Beaconchain Prefect Cloud Pipeline
+
+on:
+  push:
+    branches: [ main, mine ]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'عملیات مورد نظر (deploy, list, run, status)'
+        required: true
+        default: 'status'
+        type: choice
+        options:
+          - status
+          - list-flows
+          - deploy-flows
+          - run-flow
+          - create-flow
+
+jobs:
+  prefect-cloud:
+    name: 🚀 Beaconchain Prefect Cloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      # ------------------------------------------------------------
+      # 1. دریافت کد مخزن
+      # ------------------------------------------------------------
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ------------------------------------------------------------
+      # 2. نصب پایتون و Prefect
+      # ------------------------------------------------------------
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install Prefect & Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install prefect prefect-shell prefect-http
+          pip freeze > requirements.txt
+
+      # ------------------------------------------------------------
+      # 3. احراز هویت با Prefect Cloud
+      # ------------------------------------------------------------
+      - name: 🔐 Authenticate with Prefect Cloud
+        env:
+          PREFECT_API_KEY: ${{ secrets.PREFECT_API_KEY }}
+          PREFECT_WORKSPACE: beaconchain/prod
+        run: |
+          if [ -n "$PREFECT_API_KEY" ]; then
+            prefect cloud login --key "$PREFECT_API_KEY" --workspace "$PREFECT_WORKSPACE"
+            echo "✅ احراز هویت با حساب «بیکن چین» انجام شد."
+          else
+            echo "⚠️ کلید API تنظیم نشده است. عملیات در حالت شبیه‌سازی اجرا می‌شود."
+          fi
+
+      # ------------------------------------------------------------
+      # 4. اجرای عملیات درخواستی
+      # ------------------------------------------------------------
+      - name: ⚡ Execute Action
+        id: execute
+        env:
+          PREFECT_API_KEY: ${{ secrets.PREFECT_API_KEY }}
+        run: |
+          ACTION="${{ github.event.inputs.action }}"
+          echo "📌 عملیات: $ACTION" > output.txt
+          echo "=====================================" >> output.txt
+          echo "👤 حساب: beaconchain" >> output.txt
+          echo "🕐 زمان: $(date)" >> output.txt
+          echo "" >> output.txt
+
+          case "$ACTION" in
+            status)
+              echo "📊 وضعیت Prefect Cloud (حساب بیکن چین):" >> output.txt
+              if [ -n "$PREFECT_API_KEY" ]; then
+                prefect workspace ls --limit 5 >> output.txt 2>&1 || echo "⚠️ خطا در دریافت وضعیت" >> output.txt
+              else
+                echo "🔑 کلید API تنظیم نشده است." >> output.txt
+                echo "📌 لطفاً PREFECT_API_KEY را در Secrets تنظیم کنید." >> output.txt
+              fi
+              ;;
+
+            list-flows)
+              echo "📋 لیست فلوهای موجود در حساب بیکن چین:" >> output.txt
+              if [ -n "$PREFECT_API_KEY" ]; then
+                prefect flow ls --limit 20 >> output.txt 2>&1 || echo "⚠️ خطا در دریافت لیست" >> output.txt
+              else
+                echo "🔍 جستجوی فایل‌های محلی:" >> output.txt
+                find . -name "*.py" -type f | while read file; do
+                  if grep -q "@flow" "$file" 2>/dev/null; then
+                    echo "  ✅ $file" >> output.txt
+                  fi
+                done
+              fi
+              ;;
+
+            deploy-flows)
+              echo "🚀 استقرار فلوها در Prefect Cloud (بیکن چین):" >> output.txt
+              if [ -n "$PREFECT_API_KEY" ]; then
+                # جستجوی فایل‌های deployment.yaml
+                find . -name "*deployment.yaml" -o -name "*deployment.yml" | while read deploy_file; do
+                  echo "  📤 استقرار از: $deploy_file" >> output.txt
+                  prefect deploy --path "$deploy_file" --yes >> output.txt 2>&1 || echo "  ❌ خطا در استقرار" >> output.txt
+                done
+                # اگر فایل deployment وجود نداشت، یک نمونه ایجاد کن
+                if ! find . -name "*deployment.yaml" -o -name "*deployment.yml" | grep -q .; then
+                  echo "  📝 هیچ فایل deployment یافت نشد. ایجاد نمونه..." >> output.txt
+                  cat > beaconchain-deployment.yaml << 'EOF'
+      name: beaconchain-flow
+      flow:
+        name: horizon-main-flow
+        path: ./flows/main.py
+      schedules:
+        - cron: "0 9 * * *"
+          timezone: "Asia/Tehran"
+      parameters:
+        environment: production
+      EOF
+                  echo "  ✅ فایل beaconchain-deployment.yaml ایجاد شد." >> output.txt
+                  prefect deploy --path beaconchain-deployment.yaml --yes >> output.txt 2>&1 || echo "  ❌ خطا در استقرار" >> output.txt
+                fi
+              else
+                echo "🔑 کلید API تنظیم نشده است. عملیات شبیه‌سازی شد." >> output.txt
+              fi
+              ;;
+
+            run-flow)
+              echo "🏃 اجرای فلو (حساب بیکن چین):" >> output.txt
+              if [ -n "$PREFECT_API_KEY" ]; then
+                # یافتن اولین فلو و اجرای آن
+                FLOW_NAME=$(prefect flow ls --limit 1 | tail -n 1 | awk '{print $1}')
+                if [ -n "$FLOW_NAME" ]; then
+                  echo "  🚀 اجرای فلو: $FLOW_NAME" >> output.txt
+                  prefect flow run --flow "$FLOW_NAME" >> output.txt 2>&1 || echo "  ❌ خطا در اجرا" >> output.txt
+                else
+                  echo "  ❌ هیچ فلو برای اجرا یافت نشد." >> output.txt
+                  # اجرای یک فلو نمونه محلی
+                  echo "  📝 ایجاد و اجرای فلو نمونه..." >> output.txt
+                  cat > sample_flow.py << 'EOF'
+      from prefect import flow
+
+      @flow(log_prints=True)
+      def beaconchain_flow():
+          print("🔥 سلام از بیکن چین!")
+          print("🚀 این فلو در حساب Prefect Cloud شما اجرا شد.")
+          return "موفق"
+
+      if __name__ == "__main__":
+          beaconchain_flow()
+      EOF
+                  python sample_flow.py >> output.txt 2>&1
+                fi
+              else
+                echo "🔑 کلید API تنظیم نشده است. اجرای محلی:" >> output.txt
+                cat > sample_flow.py << 'EOF'
+      from prefect import flow
+
+      @flow(log_prints=True)
+      def beaconchain_local_flow():
+          print("🔥 سلام از بیکن چین (محلی)!")
+          return "موفق"
+
+      if __name__ == "__main__":
+          beaconchain_local_flow()
+      EOF
+                python sample_flow.py >> output.txt 2>&1
+              fi
+              ;;
+
+            create-flow)
+              echo "📝 ایجاد فلو جدید برای حساب بیکن چین:" >> output.txt
+              mkdir -p flows
+              cat > flows/beaconchain_main_flow.py << 'EOF'
+      # ============================================================
+      # Beaconchain Main Flow - Horizon Project
+      # ============================================================
+      from prefect import flow, task
+      import time
+
+      @task
+      def fetch_validator_data():
+          """دریافت داده‌های اعتبارسنج‌ها از شبکه اتریوم"""
+          # اینجا کد واقعی دریافت داده قرار می‌گیرد
+          return {"total": 100000, "online": 88000}
+
+      @task
+      def analyze_network_status(data):
+          """تحلیل وضعیت شبکه"""
+          online_percent = (data["online"] / data["total"]) * 100
+          return f"وضعیت شبکه: {online_percent:.1f}% آنلاین"
+
+      @flow(log_prints=True)
+      def beaconchain_daily_report():
+          """گزارش روزانه وضعیت شبکه بیکن چین"""
+          print("🔥 گزارش روزانه بیکن چین شروع شد")
+          data = fetch_validator_data()
+          result = analyze_network_status(data)
+          print(f"📊 نتیجه: {result}")
+          return result
+
+      if __name__ == "__main__":
+          beaconchain_daily_report()
+      EOF
+              echo "✅ فلو در مسیر flows/beaconchain_main_flow.py ایجاد شد." >> output.txt
+              echo "📄 برای اجرا: python flows/beaconchain_main_flow.py" >> output.txt
+              ;;
+
+            *)
+              echo "❌ عملیات ناشناخته: $ACTION" > output.txt
+              echo "عملیات پشتیبانی شده:" >> output.txt
+              echo "  status        - نمایش وضعیت حساب" >> output.txt
+              echo "  list-flows    - لیست فلوها" >> output.txt
+              echo "  deploy-flows  - استقرار فلوها" >> output.txt
+              echo "  run-flow      - اجرای یک فلو" >> output.txt
+              echo "  create-flow   - ایجاد فلو نمونه" >> output.txt
+              ;;
+          esac
+          
+          cat output.txt
+
+      # ------------------------------------------------------------
+      # 5. ایجاد Issue با نتیجه
+      # ------------------------------------------------------------
+      - name: 📝 Create Issue with Result
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let output = '';
+            try {
+              output = fs.readFileSync('output.txt', 'utf8');
+            } catch (e) {
+              output = '❌ خطا در خواندن خروجی';
+            }
+            
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🔥 Beaconchain Prefect: ${{ github.event.inputs.action }}`,
+              body: `**📌 نتیجه عملیات در حساب «بیکن چین»:**\n\n\`\`\`\n${output}\n\`\`\`\n\n---\n👤 حساب: **beaconchain**\n🕐 زمان: ${new Date().toLocaleString('fa-IR')}`
+            });
+            console.log(`✅ Issue #${issue.data.number} ایجاد شد.`);
+
+      # ------------------------------------------------------------
+      # 6. کامیت خودکار تغییرات (اختیاری)
+      # ------------------------------------------------------------
+      - name: 💾 Commit changes (optional)
+        if: github.event.inputs.action == 'create-flow' || github.event.inputs.action == 'deploy-flows'
+        run: |
+          git config user.name "Beaconchain AI"
+          git config user.email "beaconchain@beaconchain.us"
+          git add . || true
+          git commit -m "🔥 Beaconchain AI: خودکار" || echo "تغییری وجود ندارد"
+          git push origin mine || echo "پوش انجام نشد"
