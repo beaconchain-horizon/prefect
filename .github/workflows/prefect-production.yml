@@ -167,7 +167,7 @@ jobs:
 
     steps:
       - name: 📢 Discord Notification
-        uses: rjstone/discord-webhook-notify@v1
+        uses: rjstone/discord-webhook-notify@v2
         with:
           severity: ${{ needs.deploy.result == 'success' && 'info' || 'error' }}
           webhookUrl: ${{ secrets.DISCORD_WEBHOOK }}
